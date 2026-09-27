@@ -1,7 +1,13 @@
+import sqlite3
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 app.json.ensure_ascii = False
+
+def get_db_connection():
+    conn = sqlite3.connect("menu.db")
+    conn.row_factory = sqlite3.Row
+    return conn
 
 @app.route("/")
 def home():
@@ -192,76 +198,87 @@ def delete_note(id):
     return jsonify({"error": "Заметка не найдена"}), 404
 
 
-menu = [
-    {"id": 1, "name": "Плов",      "category": "main",  "price": 40, "available": True},
-    {"id": 2, "name": "Шурпа",     "category": "soup",  "price": 30, "available": True},
-    {"id": 3, "name": "Самса",     "category": "snack", "price": 10, "available": True},
-    {"id": 4, "name": "Чай",       "category": "drink", "price": 5,  "available": True},
-    {"id": 5, "name": "Кофе",      "category": "drink", "price": 15, "available": False},
-]
 
 @app.route("/menu", methods=["GET"])
 def get_menu():
-    availeble = request.args.get("available")
-    max_price = request.args.get("max_price")
+    conn = get_db_connection()
+    cursor = conn.cursor()
     
-    filtered_menu = menu
+    cursor.execute("SELECT * FROM dishes")
+    rows = cursor.fetchall()
     
-    if availeble is not None:  
-        if availeble == "true":
-            filtered_menu = [item for item in menu if item["available"]]
-        elif availeble == "false":
-            filtered_menu = [item for item in menu if not item["available"]]
+    conn.close()
     
-    if max_price is not None:
-            max_price = int(max_price)
-            filtered_menu = [item for item in filtered_menu if item["price"] <= max_price]
-            
-    return jsonify(filtered_menu)
-
+    dishes = []
+    
+    for row in rows:
+        dishes.append({
+            "id": row["id"],
+            "name": row["name"],
+            "category": row["category"],
+            "price": row["price"],
+            "available": bool(row["available"])
+        })
+        
+    return jsonify(dishes)
 
 
 @app.route("/menu/<int:id>", methods=["GET"])
-def get_menu_item(id):
-    for item in menu:
-        if item["id"] == id:
-            return jsonify(item)
-
-    return jsonify({"error": "Блюдо не найдено"}), 404
-
-@app.route("/menu/category/<string:category>", methods=["GET"])
-def get_menu_by_category(category):
-    filtered_items = [item for item in menu if item["category"] == category]
-    return jsonify(filtered_items)
+def get_dish(id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM dishes WHERE id = ?", (id,))
+    row = cursor.fetchone()
+    
+    conn.close()
+    
+    if row is None:
+        return jsonify({"error": "Dish not found"}), 404
+    
+    dish = {
+        "id": row["id"],
+        "name": row["name"],
+        "category": row["category"],
+        "price": row["price"],
+        "available": bool(row["available"])
+    }
+    
+    return jsonify(dish)
 
 @app.route("/menu", methods=["POST"])
-def add_menu_item():
+def add_dish():
     data = request.get_json()
+    
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+    
+    name = data.get("name")
+    category = data.get("category")
+    price = data.get("price")
+    available = data.get("available", True)
+    
+    if not name or not category or price is None:
+        return jsonify({"error": "Fieldes name, category, price are required"}), 400
 
-    if "name" not in data or "category" not in data or "price" not in data:
-        return jsonify({"error": "Нужны поля name, category и price"}), 400
+    conn = get_db_connection()
+    cursor = conn.cursor()
 
-    new_id = max(item["id"] for item in menu) + 1
+    cursor.execute("INSERT INTO dishes (name, category, price, available) VALUES (?, ?, ?, ?)",
+                   (name, category, price, 1 if available else 0))
+    
+    new_id = cursor.lastrowid
+    
+    conn.commit()
+    conn.close()
 
-    new_item = {
+    return jsonify({
         "id": new_id,
-        "name": data["name"],
-        "category": data["category"],
-        "price": data["price"],
-        "available": data.get("available", True)
-    }
-
-    menu.append(new_item)
-
-    return jsonify(new_item), 201
-
-@app.route("/menu/stats", methods=["GET"])
-def get_menu_stats():
-    total_items = len(menu)
-    available_items = sum(1 for item in menu if item["available"])
-    unavailable_items = sum(1 for item in menu if not item["available"])
-    avg_price = sum(item["price"] for item in menu) / total_items
-    categories = (item["category"] for item in menu)
+        "name": name,
+        "category": category,
+        "price": price,
+        "available": available
+        }), 201
     
 
     return jsonify({
@@ -271,33 +288,6 @@ def get_menu_stats():
         "avg_price": avg_price ,
         "categories": list(categories)
     })
-    
-@app.route("/menu/<int:id>", methods=["PATCH"])
-def update_menu_item(id):
-    data = request.get_json()
-    for item in menu:
-        if item["id"] == id:
-            for key, value in data.items():
-                if key in item:
-                    item[key] = value
-            return jsonify(item)
-    return jsonify({"error": "Блюдо не найдено"}), 404
-
-@app.route("/menu/<int:id>", methods=["DELETE"])
-def delete_menu_item(id):
-    for item in menu:
-        if item["id"] == id:
-            menu.remove(item)
-            return jsonify({"status": "deleted", "id": id})
-    return jsonify({"error": "Блюдо не найдено"}), 404
-
-@app.route("/menu/<int:id>/toggle", methods=["POST"])
-def toggle_menu_item(id):
-    for item in menu:
-        if item["id"] == id:
-            item["available"] = not item["available"]
-            return jsonify(item)
-    return jsonify({"error": "Блюдо не найдено"}), 404
 
 if __name__ == "__main__":
     app.run(debug=True)
