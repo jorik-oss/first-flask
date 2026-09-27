@@ -201,10 +201,30 @@ def delete_note(id):
 
 @app.route("/menu", methods=["GET"])
 def get_menu():
+    category = request.args.get("category")
+    max_price = request.args.get("max_price")
+    available = request.args.get("available")
+    
+    query = "SELECT * FROM dishes WHERE 1=1"
+    
+    params = []
+    
+    if category:
+        query += " AND category = ?"
+        params.append(category)
+        
+    if max_price:
+        query += " AND price <= ?"
+        params.append(max_price)
+        
+    if available is not None:
+        query += " AND available = ?"
+        params.append(1 if available.lower() == "true" else 0)
+        
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    cursor.execute("SELECT * FROM dishes")
+    cursor.execute(query, params)
     rows = cursor.fetchall()
     
     conn.close()
@@ -259,7 +279,7 @@ def add_dish():
     available = data.get("available", True)
     
     if not name or not category or price is None:
-        return jsonify({"error": "Fieldes name, category, price are required"}), 400
+        return jsonify({"error": "Fields name, category, price are required"}), 400
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -280,14 +300,75 @@ def add_dish():
         "available": available
         }), 201
     
+    
+@app.route("/menu/<int:id>", methods=["DELETE"])
+def delete_dish(id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("DELETE FROM dishes WHERE id = ?", (id,))
+    
+    if cursor.rowcount == 0:
+        conn.close()
+        return jsonify({"error": "Dish not found"}), 404
+    
+    conn.commit()
+    conn.close()
+    
+    return jsonify({"status": "deleted"}), 200
+    
+    
+@app.route("/menu/<int:id>", methods=["PATCH"])
+
+def update_dish(id):
+    data = request.get_json()
+    
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+    
+    allowed_fields = ["name", "category", "price", "available"]
+    
+    fields = []
+    values = []
+    
+    for field in allowed_fields:
+        if field in data:
+            fields.append(f"{field} = ?")
+            if field == "available":
+                values.append(1 if data[field] else 0)
+            else:
+                values.append(data[field])
+
+    if not fields:
+        return jsonify({"error": "No valid fields to update"}), 400
+
+    values.append(id)
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    query = f"""UPDATE dishes SET {', '.join(fields)} WHERE id = ?"""
+
+    cursor.execute(query, values)
+
+    if cursor.rowcount == 0:
+        conn.close()
+        return jsonify({"error": "Dish not found"}), 404
+
+    conn.commit()
+    
+    cursor.execute("SELECT * FROM dishes WHERE id = ?", (id,))
+    row = cursor.fetchone()
+    
+    conn.close()
 
     return jsonify({
-        "total_items": total_items,
-        "available_items": available_items,
-        "unavailable_items": unavailable_items,
-        "avg_price": avg_price ,
-        "categories": list(categories)
-    })
+        "id": row["id"],
+        "name": row["name"],
+        "category": row["category"],
+        "price": row["price"],
+        "available": bool(row["available"])
+    }), 200
 
 if __name__ == "__main__":
     app.run(debug=True)
